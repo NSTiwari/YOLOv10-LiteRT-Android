@@ -7,4 +7,4 @@ This repository is an implementation of converting the YOLOv10 object detection 
 
 
 ## Pipeline:
-<img src="https://github.com/NSTiwari/OLOv10-LiteRT-Android/blob/main/assets/YOLOv10_LiteRT_Pipeline.png"/>
+<img src="https://github.com/NSTiwari/YOLOv10-LiteRT-Android/blob/main/assets/YOLOv10_LiteRT_Pipeline.png"/>
