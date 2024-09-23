@@ -19,7 +19,7 @@ This repository is an implementation of converting the YOLOv10 object detection 
 5. Install the app on your phone and enjoy real-time object detection on Android.
    
 
-# Acknowledgment:
+# Acknowledgment
 <img src="https://github.com/NSTiwari/YOLOv10-LiteRT-Android/blob/main/assets/google.png">
 
 This project was developed during Google's ML Developer Programs AI Sprint. Thanks to the MLDP team for providing Google Cloud credits to support this project.
