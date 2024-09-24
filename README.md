@@ -25,11 +25,10 @@ This repository is an implementation of converting the YOLOv10 object detection 
 
 ## Resources
 
-1. Colab Notebook: <a target="_blank" href="https://colab.research.google.com/github/NSTiwari/YOLOv10-LiteRT-Android/blob/main/YOLOv10_LiteRT.ipynb">
-  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
-</a>
+1. **Colab Notebook**: 
+   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/NSTiwari/YOLOv10-LiteRT-Android/blob/main/YOLOv10_LiteRT.ipynb)
 
-2. [Medium] blog for step-by-step implementation.
+2. **Medium Blog**: [Step-by-step implementation](https://medium.com/@tiwarinitin1999)
    
 
 # Acknowledgment
