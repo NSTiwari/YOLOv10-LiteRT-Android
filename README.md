@@ -23,11 +23,12 @@ This repository is an implementation of converting the YOLOv10 object detection 
 
 1. **Colab Notebook**: 
    [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/NSTiwari/YOLOv10-LiteRT-Android/blob/main/YOLOv10_LiteRT.ipynb)
+2. [**Medium Blog**](https://medium.com/@tiwarinitin1999) for step-by-step implementation.
+3. Official [documentation](https://docs.ultralytics.com/models/yolov10/) of YOLOv10 by Ultralytics
+4. [Google AI Edge LiteRT](https://ai.google.dev/edge/litert)
 
-2. **Medium Blog**: [Step-by-step implementation](https://medium.com/@tiwarinitin1999)
-   
-
-# Acknowledgment
+  
+## Acknowledgment
 <img src="https://github.com/NSTiwari/YOLOv10-LiteRT-Android/blob/main/assets/google.png">
 
 This project was developed during Google's ML Developer Programs AI Sprint. Thanks to the MLDP team for providing Google Cloud credits to support this project.
