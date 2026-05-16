@@ -3,7 +3,7 @@
 # Developed by Nitin Tiwari (github.com/NSTiwari)
 #
 # Usage:
-#   # Export YOLOv10n to TFLite first:
+#   # Export YOLOv10n to TFLite:
 #   python yolov10_litert.py --export --model yolov10n.pt
 #
 #   # Run inference on an image:
@@ -12,10 +12,17 @@
 #   # Run inference on a video:
 #   python yolov10_litert.py --input test_video.mp4 --tflite yolov10n_saved_model/yolov10n_float32.tflite
 #
+#   # Benchmark inference speed over N runs:
+#   python yolov10_litert.py --input test_image.jpg --tflite yolov10n_saved_model/yolov10n_float32.tflite --benchmark 50
+#
+#   # Visualize the model architecture in Model Explorer:
+#   python yolov10_litert.py --tflite yolov10n_saved_model/yolov10n_float32.tflite --visualize
+#
 # Install dependencies:
 #   pip install -r requirements.txt
 
 import os
+import time
 import json
 import random
 import argparse
@@ -47,7 +54,7 @@ def create_labelmap(export_folder, output_file="labels.json"):
     with open(output_file, "w") as f:
         json.dump(names, f, indent=2)
 
-    print(f"Labelmap saved to: {output_file}")
+    print(f"Labelmap saved to: {output_file} ({len(names)} classes)")
     return names
 
 
@@ -61,10 +68,37 @@ def generate_color_map(labels):
     return {label: [random.randint(0, 255) for _ in range(3)] for label in labels.values()}
 
 
+def load_interpreter(tflite_path):
+    """Loads the TFLite model, allocates tensors, and returns interpreter + tensor details."""
+    interpreter = Interpreter(model_path=tflite_path)
+    interpreter.allocate_tensors()
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+
+    input_size = input_details[0]["shape"][1]
+    output_shape = output_details[0]["shape"]
+    print(f"Model loaded: {os.path.basename(tflite_path)}")
+    print(f"  Input size  : {input_size}x{input_size}")
+    print(f"  Output shape: {output_shape}")
+
+    return interpreter, input_details, output_details
+
+
 def load_and_preprocess(image_path, input_size):
     image = cv2.imread(image_path)
+    if image is None:
+        raise FileNotFoundError(f"Could not read image: {image_path}")
     original_h, original_w = image.shape[:2]
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image = cv2.resize(image, (input_size, input_size))
+    image = image / 255.0
+    return image, (original_h, original_w)
+
+
+def preprocess_frame(frame, input_size):
+    """Same preprocessing as load_and_preprocess but takes a raw BGR frame array."""
+    original_h, original_w = frame.shape[:2]
+    image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     image = cv2.resize(image, (input_size, input_size))
     image = image / 255.0
     return image, (original_h, original_w)
@@ -75,10 +109,7 @@ def run_inference(interpreter, input_details, output_details, frame_or_path, is_
     input_size = input_details[0]["shape"][1]
 
     if is_video_frame:
-        original_h, original_w = frame_or_path.shape[:2]
-        image = cv2.cvtColor(frame_or_path, cv2.COLOR_BGR2RGB)
-        image = cv2.resize(image, (input_size, input_size))
-        image = image / 255.0
+        image, (original_h, original_w) = preprocess_frame(frame_or_path, input_size)
     else:
         image, (original_h, original_w) = load_and_preprocess(frame_or_path, input_size)
 
@@ -125,6 +156,16 @@ def postprocess(output_data, original_dims, labels, confidence_threshold):
     return detections
 
 
+def print_detections(detections):
+    """Prints a quick summary of what was detected and at what confidence."""
+    if not detections:
+        print("  No detections above threshold.")
+        return
+    print(f"  {len(detections)} detection(s):")
+    for d in detections:
+        print(f"    {d['label']:20s} {d['score']:.2f}  box={d['box']}")
+
+
 def draw_boxes(image_rgb, detections, color_map):
     """Draws bounding boxes and label badges onto an RGB image array."""
     for det in detections:
@@ -154,36 +195,44 @@ def draw_boxes(image_rgb, detections, color_map):
     return image_rgb
 
 
-def infer_image(image_path, interpreter, input_details, output_details, labels, color_map, confidence_threshold):
+def infer_image(image_path, interpreter, input_details, output_details,
+                labels, color_map, confidence_threshold, show=True):
     output_data, original_dims = run_inference(interpreter, input_details, output_details, image_path)
     detections = postprocess(output_data, original_dims, labels, confidence_threshold)
+    print_detections(detections)
 
     image = cv2.imread(image_path)
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image_rgb = draw_boxes(image_rgb, detections, color_map)
 
-    plt.figure(figsize=(12, 8))
-    plt.imshow(image_rgb)
-    plt.axis("off")
-    plt.show()
+    if show:
+        plt.figure(figsize=(12, 8))
+        plt.imshow(image_rgb)
+        plt.axis("off")
+        plt.show()
 
     output_path = "output_" + os.path.basename(image_path)
     cv2.imwrite(output_path, cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR))
-    print(f"Saved to: {output_path}")
-    return output_path
+    print(f"Saved: {output_path}")
+    return output_path, detections
 
 
-def infer_video(video_path, interpreter, input_details, output_details, labels, color_map, confidence_threshold):
+def infer_video(video_path, interpreter, input_details, output_details,
+                labels, color_map, confidence_threshold):
     cap = cv2.VideoCapture(video_path)
-    output_path = "output_" + os.path.splitext(os.path.basename(video_path))[0] + ".avi"
+    if not cap.isOpened():
+        raise IOError(f"Could not open video: {video_path}")
 
+    output_path = "output_" + os.path.splitext(os.path.basename(video_path))[0] + ".avi"
     fourcc = cv2.VideoWriter_fourcc(*"XVID")
     out = cv2.VideoWriter(
         output_path, fourcc, 20.0,
         (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
     )
 
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_count = 0
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -194,29 +243,78 @@ def infer_video(video_path, interpreter, input_details, output_details, labels, 
         )
         detections = postprocess(output_data, original_dims, labels, confidence_threshold)
 
-        # Draw on a copy so the original frame stays clean for the writer
         annotated = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         annotated = draw_boxes(annotated, detections, color_map)
         out.write(cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
 
         frame_count += 1
         if frame_count % 30 == 0:
-            print(f"  Processed {frame_count} frames ...")
+            pct = (frame_count / total_frames * 100) if total_frames > 0 else 0
+            print(f"  {frame_count}/{total_frames} frames ({pct:.0f}%) ...")
 
     cap.release()
     out.release()
-    print(f"Saved to: {output_path}")
+    print(f"Saved: {output_path}")
     return output_path
 
 
+def benchmark(image_path, interpreter, input_details, output_details,
+              labels, confidence_threshold, runs=50):
+    """
+    Runs inference N times on the same image and reports min/avg/max latency.
+    Useful for comparing float32 vs float16 vs int8 model performance.
+    """
+    print(f"\nBenchmarking over {runs} runs ...")
+    times = []
+
+    for i in range(runs):
+        t0 = time.perf_counter()
+        run_inference(interpreter, input_details, output_details, image_path)
+        t1 = time.perf_counter()
+        times.append((t1 - t0) * 1000)
+
+    times_arr = np.array(times)
+    print(f"  Min  : {times_arr.min():.1f} ms")
+    print(f"  Avg  : {times_arr.mean():.1f} ms")
+    print(f"  Max  : {times_arr.max():.1f} ms")
+    print(f"  Std  : {times_arr.std():.1f} ms")
+    print(f"  ~FPS : {1000 / times_arr.mean():.1f}")
+
+
+def visualize_model(tflite_path):
+    """Opens the LiteRT model in Google AI Edge Model Explorer for interactive inspection."""
+    try:
+        import model_explorer
+        print(f"Opening Model Explorer for: {tflite_path}")
+        print("A browser tab will open with the full network graph.")
+        model_explorer.visualize(tflite_path)
+    except ImportError:
+        print("model_explorer not installed. Run: pip install ai-edge-model-explorer")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="YOLOv10 LiteRT inference")
-    parser.add_argument("--export", action="store_true", help="Export YOLOv10 .pt to TFLite")
-    parser.add_argument("--model", default="yolov10n.pt", help="Path to YOLOv10 .pt weights (for export)")
-    parser.add_argument("--tflite", default=None, help="Path to the .tflite model file")
-    parser.add_argument("--input", default=None, help="Path to input image or video")
-    parser.add_argument("--labels", default="labels.json", help="Path to labels JSON file")
-    parser.add_argument("--confidence", type=float, default=0.4, help="Confidence threshold (default: 0.4)")
+    parser = argparse.ArgumentParser(
+        description="YOLOv10 LiteRT — export, infer, benchmark",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument("--export", action="store_true",
+                        help="Export YOLOv10 .pt weights to TFLite format")
+    parser.add_argument("--model", default="yolov10n.pt",
+                        help="Path to YOLOv10 .pt weights file (used with --export)")
+    parser.add_argument("--tflite", default=None,
+                        help="Path to the exported .tflite model")
+    parser.add_argument("--input", default=None,
+                        help="Path to an input image or video file")
+    parser.add_argument("--labels", default="labels.json",
+                        help="Path to labels JSON file (default: labels.json)")
+    parser.add_argument("--confidence", type=float, default=0.4,
+                        help="Confidence threshold for detections (default: 0.4)")
+    parser.add_argument("--benchmark", type=int, default=0, metavar="N",
+                        help="Run inference N times and report latency stats")
+    parser.add_argument("--visualize", action="store_true",
+                        help="Open the model in Google AI Edge Model Explorer")
+    parser.add_argument("--no-show", action="store_true",
+                        help="Skip displaying the output image (just save it)")
     args = parser.parse_args()
 
     if args.export:
@@ -227,28 +325,33 @@ def main():
         return
 
     if not args.tflite:
-        parser.error("--tflite is required for inference")
-    if not args.input:
-        parser.error("--input is required for inference")
+        parser.error("--tflite is required")
 
-    print(f"Loading model: {args.tflite}")
-    interpreter = Interpreter(model_path=args.tflite)
-    interpreter.allocate_tensors()
+    if args.visualize:
+        visualize_model(args.tflite)
+        return
 
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-    print(f"Input size: {input_details[0]['shape'][1]}x{input_details[0]['shape'][2]}")
-    print(f"Output shape: {output_details[0]['shape']}")
+    if not args.input and args.benchmark == 0:
+        parser.error("--input is required unless using --visualize or --export")
 
+    interpreter, input_details, output_details = load_interpreter(args.tflite)
     labels = load_labels(args.labels)
     color_map = generate_color_map(labels)
 
-    # Decide image vs video based on file extension
+    if args.benchmark > 0:
+        if not args.input:
+            parser.error("--input is required for --benchmark")
+        benchmark(args.input, interpreter, input_details, output_details,
+                  labels, args.confidence, runs=args.benchmark)
+        return
+
     ext = os.path.splitext(args.input)[1].lower()
     if ext in (".mp4", ".avi", ".mov", ".mkv"):
-        infer_video(args.input, interpreter, input_details, output_details, labels, color_map, args.confidence)
+        infer_video(args.input, interpreter, input_details, output_details,
+                    labels, color_map, args.confidence)
     else:
-        infer_image(args.input, interpreter, input_details, output_details, labels, color_map, args.confidence)
+        infer_image(args.input, interpreter, input_details, output_details,
+                    labels, color_map, args.confidence, show=not args.no_show)
 
 
 if __name__ == "__main__":
