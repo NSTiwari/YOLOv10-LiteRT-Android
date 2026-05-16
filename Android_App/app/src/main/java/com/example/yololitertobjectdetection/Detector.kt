@@ -3,6 +3,7 @@ package com.example.yololitertobjectdetection
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.SystemClock
+import android.util.Log
 import com.example.yololitertobjectdetection.MetaData.extractNamesFromLabelFile
 import com.example.yololitertobjectdetection.MetaData.extractNamesFromMetadata
 import org.tensorflow.lite.DataType
@@ -31,13 +32,19 @@ class Detector(
     private var numChannel = 0
     private var numElements = 0
 
+    // Running stats so we can report avg/min/max inference time
+    private var totalInferenceTime = 0L
+    private var minInferenceTime = Long.MAX_VALUE
+    private var maxInferenceTime = 0L
+    private var frameCount = 0
+
     private val imageProcessor = ImageProcessor.Builder()
         .add(NormalizeOp(INPUT_MEAN, INPUT_STANDARD_DEVIATION))
         .add(CastOp(INPUT_IMAGE_TYPE))
         .build()
 
     init {
-        val options = Interpreter.Options().apply{
+        val options = Interpreter.Options().apply {
             this.setNumThreads(4)
         }
 
@@ -54,7 +61,8 @@ class Detector(
             }
         }
 
-        labels.forEach(::println)
+        Log.d(TAG, "Labels loaded: ${labels.size}")
+        labels.forEach { Log.d(TAG, "  - $it") }
 
         val inputShape = interpreter.getInputTensor(0)?.shape()
         val outputShape = interpreter.getOutputTensor(0)?.shape()
@@ -74,6 +82,8 @@ class Detector(
             numElements = outputShape[1]
             numChannel = outputShape[2]
         }
+
+        Log.d(TAG, "Input: ${tensorWidth}x${tensorHeight}, Output: [${numElements}, ${numChannel}]")
     }
 
     fun restart(isGpu: Boolean) {
@@ -81,22 +91,27 @@ class Detector(
 
         val options = if (isGpu) {
             val compatList = CompatibilityList()
-            Interpreter.Options().apply{
-                if(compatList.isDelegateSupportedOnThisDevice){
+            Interpreter.Options().apply {
+                if (compatList.isDelegateSupportedOnThisDevice) {
                     val delegateOptions = compatList.bestOptionsForThisDevice
                     this.addDelegate(GpuDelegate(delegateOptions))
+                    Log.d(TAG, "GPU delegate enabled")
                 } else {
                     this.setNumThreads(4)
+                    Log.d(TAG, "GPU not supported, falling back to 4 threads")
                 }
             }
         } else {
-            Interpreter.Options().apply{
+            Interpreter.Options().apply {
                 this.setNumThreads(4)
             }
         }
 
         val model = FileUtil.loadMappedFile(context, modelPath)
         interpreter = Interpreter(model, options)
+
+        // Reset stats after switching backend
+        resetStats()
     }
 
     fun close() {
@@ -104,12 +119,9 @@ class Detector(
     }
 
     fun detect(frame: Bitmap) {
-        if (tensorWidth == 0
-            || tensorHeight == 0
-            || numChannel == 0
-            || numElements == 0) return
+        if (tensorWidth == 0 || tensorHeight == 0 || numChannel == 0 || numElements == 0) return
 
-        var inferenceTime = SystemClock.uptimeMillis()
+        val inferenceStart = SystemClock.uptimeMillis()
 
         val resizedBitmap = Bitmap.createScaledBitmap(frame, tensorWidth, tensorHeight, false)
 
@@ -121,8 +133,10 @@ class Detector(
         val output = TensorBuffer.createFixedSize(intArrayOf(1, numChannel, numElements), OUTPUT_IMAGE_TYPE)
         interpreter.run(imageBuffer, output.buffer)
 
+        val inferenceTime = SystemClock.uptimeMillis() - inferenceStart
+        updateStats(inferenceTime)
+
         val bestBoxes = bestBox(output.floatArray)
-        inferenceTime = SystemClock.uptimeMillis() - inferenceTime
 
         if (bestBoxes.isEmpty()) {
             detectorListener.onEmptyDetect()
@@ -132,7 +146,7 @@ class Detector(
         detectorListener.onDetect(bestBoxes, inferenceTime)
     }
 
-    private fun bestBox(array: FloatArray) : List<BoundingBox> {
+    private fun bestBox(array: FloatArray): List<BoundingBox> {
         val boundingBoxes = mutableListOf<BoundingBox>()
         for (r in 0 until numElements) {
             val cnf = array[r * numChannel + 4]
@@ -154,12 +168,37 @@ class Detector(
         return boundingBoxes
     }
 
+    private fun updateStats(inferenceTime: Long) {
+        frameCount++
+        totalInferenceTime += inferenceTime
+        if (inferenceTime < minInferenceTime) minInferenceTime = inferenceTime
+        if (inferenceTime > maxInferenceTime) maxInferenceTime = inferenceTime
+    }
+
+    private fun resetStats() {
+        frameCount = 0
+        totalInferenceTime = 0L
+        minInferenceTime = Long.MAX_VALUE
+        maxInferenceTime = 0L
+    }
+
+    fun getAvgInferenceTime(): Long {
+        return if (frameCount == 0) 0L else totalInferenceTime / frameCount
+    }
+
+    fun getMinInferenceTime(): Long = if (minInferenceTime == Long.MAX_VALUE) 0L else minInferenceTime
+
+    fun getMaxInferenceTime(): Long = maxInferenceTime
+
+    fun getFrameCount(): Int = frameCount
+
     interface DetectorListener {
         fun onEmptyDetect()
         fun onDetect(boundingBoxes: List<BoundingBox>, inferenceTime: Long)
     }
 
     companion object {
+        private const val TAG = "Detector"
         private const val INPUT_MEAN = 0f
         private const val INPUT_STANDARD_DEVIATION = 255f
         private val INPUT_IMAGE_TYPE = DataType.FLOAT32
