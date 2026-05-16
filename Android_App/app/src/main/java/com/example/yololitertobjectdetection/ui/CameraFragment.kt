@@ -191,6 +191,7 @@ class CameraFragment : Fragment(), Detector.DetectorListener {
     override fun onDetect(boundingBoxes: List<BoundingBox>, inferenceTime: Long) {
         requireActivity().runOnUiThread {
             binding.overlay.apply {
+                setInferenceTime(inferenceTime)
                 setResults(boundingBoxes)
                 invalidate()
             }
