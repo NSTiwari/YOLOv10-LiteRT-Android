@@ -1,0 +1,8 @@
+ultralytics
+ai-edge-litert
+ai-edge-model-explorer
+opencv-python
+Pillow
+numpy
+matplotlib
+pyyaml
